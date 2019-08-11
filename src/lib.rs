@@ -958,15 +958,16 @@ mod tests {
     #[test]
     fn test_reserve() {
         let mut map = HandleMap::with_capacity(10);
+        map.reserve(30);
         let mut handles = alloc::vec![];
         for i in 0..10 {
-            handles.push(map.insert(Foobar(i)))
+            handles.push(map.insert(Foobar(i)));
+            map.reserve(3);
         }
         map.reserve(0);
         for i in 0..10 {
             handles.push(map.insert(Foobar(i + 10)))
         }
-        
         map.reserve(map.capacity());
         for (i, &h) in handles.iter().enumerate() {
             assert_eq!(map[h], Foobar(i));

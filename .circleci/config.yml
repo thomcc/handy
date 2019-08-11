@@ -5,6 +5,7 @@ workflows:
   test:
     jobs:
       - Run tests
+      - Lint and check formatting
   coverage:
     jobs:
       - Gen Coverage
@@ -22,6 +23,17 @@ jobs:
       - run:
           name: Test
           command: cargo test --all --verbose
+
+  Lint and check formatting:
+    docker:
+      - image: circleci/rust:latest
+    steps:
+      - checkout
+      - run: rustup component add clippy rustfmt
+      - run: cargo fmt -- --version
+      - run: cargo fmt -- --check
+      - run: cargo clippy -- --version
+      - run: cargo clippy -- -D warnings
 
   Gen Coverage:
     machine: true

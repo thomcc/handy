@@ -2,12 +2,13 @@
 name = "handy"
 version = "0.1.0"
 authors = ["Thom Chiovoloni <chiovolonit@gmail.com>"]
-description = "HandleMaps and handles"
+description = "A library providing handles and handlemaps"
 edition = "2018"
 readme = "README.md"
 keywords = ["handle", "index", "stable", "generational"]
 categories = ["data-structures", "memory-management", "no-std"]
 license = "Apache-2.0 / MIT"
+repository = "https://github.com/thomcc/handy"
 
 [badges]
 circle-ci = { repository = "thomcc/handy", branch = "master" }

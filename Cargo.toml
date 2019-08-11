@@ -9,4 +9,8 @@ keywords = ["handle", "index", "stable", "generational"]
 categories = ["data-structures", "memory-management", "no-std"]
 license = "Apache-2.0 / MIT"
 
+[badges]
+circle-ci = { repository = "thomcc/handy", branch = "master" }
+codecov = { repository = "thomcc/handy", branch = "master", service = "github" }
+
 [dependencies]

@@ -154,7 +154,10 @@ impl<T> HandleMap<T> {
         self.handle_check_mut(handle)?;
         let index = handle.index();
         let mut e = &mut self.entries[index as usize];
-        e.gen += 1;
+        e.gen = e.gen.wrapping_add(1);
+        if e.gen == 0 {
+            e.gen = 1;
+        }
         debug_assert!(e.next.is_none());
         e.next = self.next;
         self.next = Some(index);
@@ -174,9 +177,9 @@ impl<T> HandleMap<T> {
         }
         let update_gen = move |e: &mut Entry<T>| {
             if (e.gen & 1) == 0 {
-                e.gen += 1;
+                e.gen = e.gen.wrapping_add(1);
             } else {
-                e.gen += 2;
+                e.gen = e.gen.wrapping_add(2);
             }
             if e.gen == 0 {
                 e.gen = 1;
@@ -672,16 +675,25 @@ mod tests {
         let handle2 = map2.insert(Foobar(1234));
 
         assert_eq!(map1.get(handle1).unwrap(), &Foobar(1234));
-        assert_eq!(map2.get(handle2).unwrap(), &Foobar(1234));
+        assert_eq!(map2.get_mut(handle2).unwrap(), &mut Foobar(1234));
 
         assert_eq!(map1.get(handle2), None);
-        assert_eq!(map2.get(handle1), None);
+        assert_eq!(map2.get_mut(handle1), None);
     }
 
     #[test]
     fn test_bad_index() {
         let map: HandleMap<Foobar> = HandleMap::new();
         assert_eq!(map.get(Handle::from_parts(100, 2, map.id)), None);
+    }
+
+    #[test]
+    fn test_wrong_gen() {
+        let mut map: HandleMap<usize> = HandleMap::new();
+        let h = map.insert(3);
+        map.remove(h).unwrap();
+        assert_eq!(map.get(h), None);
+        assert_eq!(map.remove(h), None);
     }
 
     #[test]
@@ -712,6 +724,7 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut map = HandleMap::new();
+        map.clear(); // no-op.
         for _ in 0..2 {
             let mut handles = alloc::vec![];
             for i in 0..120 {
@@ -782,16 +795,18 @@ mod tests {
 
     fn mixed_handlemap() -> (HandleMap<Foobar>, Vec<(Handle, usize)>) {
         let mut handles = alloc::vec![];
-        let mut map = HandleMap::new();
+        let mut map = HandleMap::with_capacity(10);
         let mut c = 0;
         for &sp in &[2, 3, 5] {
             for _ in 0..100 {
                 c += 1;
-                handles.push((map.insert(Foobar(c)), c))
+                handles.push((map.insert(Foobar(c)), c));
+                assert_eq!(map.len(), handles.len());
             }
             let mut i = 0;
             while i < handles.len() {
                 map.remove(handles.swap_remove(i).0).unwrap();
+                assert_eq!(map.len(), handles.len());
                 i += sp;
             }
         }
@@ -809,6 +824,7 @@ mod tests {
             assert!(m.contains_key(*h));
         }
         m.clear();
+        assert!(m.is_empty());
         for (i, h) in v.iter().enumerate() {
             assert_eq!(m.find_handle(&i), None);
             assert!(!m.contains_key(*h));

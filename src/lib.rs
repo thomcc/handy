@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(clippy::let_and_return)]
-#![deny(unsafe_code)]
+#![deny(unsafe_code, missing_docs)]
 //! # `handy`
 //!
 //! `handy` provides handles and handle maps. This is a fairly useful data
@@ -486,6 +486,7 @@ impl<T> core::ops::IndexMut<Handle> for HandleMap<T> {
     }
 }
 
+/// An iterator that moves out of a HandleMap.
 #[derive(Debug)]
 pub struct IntoIter<T> {
     inner: alloc::vec::IntoIter<Entry<T>>,

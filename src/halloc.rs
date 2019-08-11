@@ -28,7 +28,9 @@ pub struct HandleAlloc {
 impl Default for HandleAlloc {
     #[inline]
     fn default() -> Self {
-        Self::new()
+        Self {
+            inner: HandleMap::new_with_map_id(0),
+        }
     }
 }
 
@@ -36,9 +38,7 @@ impl HandleAlloc {
     /// Construct a new handle allocator.
     #[inline]
     pub fn new() -> Self {
-        Self {
-            inner: HandleMap::new_with_map_id(0),
-        }
+        Self::default()
     }
 
     /// Returns a new allocator with the requested capacity.
@@ -153,6 +153,7 @@ mod tests {
             assert_eq!(v.index(), i);
         }
         assert_eq!(a.capacity(), 10);
+        assert_eq!(a.len(), 10);
         for i in 0..10 {
             assert_eq!(a.handle_for_index(i), Some(Handle::from_raw_parts(i, 2, 0)));
         }

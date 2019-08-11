@@ -400,21 +400,21 @@ impl<T> HandleMap<T> {
         if let Some(n) = self.next {
             n as usize
         } else {
-            let n = self.grow_unlikely(self.capacity() + 1);
+            let n = self.grow_for_insert();
             debug_assert!(self.next == Some(n as u32));
             n
         }
     }
 
     #[cold]
-    fn grow_unlikely(&mut self, req_cap: usize) -> usize {
-        self.grow(req_cap)
+    fn grow_for_insert(&mut self) -> usize {
+        self.grow(self.capacity() + 1).expect("bug")
     }
 
     // note: returns `self.next` unwrapped.
-    fn grow(&mut self, need: usize) -> usize {
+    fn grow(&mut self, need: usize) -> Option<usize> {
         if need <= self.capacity() {
-            return self.next.expect("bug") as usize;
+            return self.next.map(|u| u as usize);
         }
         let cap = (self.capacity() * 2).max(need).max(8);
         assert!(cap <= i32::max_value() as usize, "Capacity overflow");
@@ -447,7 +447,7 @@ impl<T> HandleMap<T> {
         {
             self.assert_valid();
         }
-        current_cap as usize
+        Some(current_cap as usize)
     }
 
     #[cfg(test)]
@@ -843,6 +843,9 @@ mod tests {
         assert_eq!(h.index(), (!0u32) as usize);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.decompose(), (h.index() as u32, h.generation(), h.meta()));
+
+        assert_eq!(Handle::from_raw(h.into_raw()), h);
 
         let h = Handle::from_raw_parts(0, !0, 0);
         assert_eq!(h.index(), 0);
@@ -906,6 +909,11 @@ mod tests {
 
         assert_eq!(map1.get(handle2), None);
         assert_eq!(map2.get_mut(handle1), None);
+        assert_eq!(handle1.meta(), map1.map_id());
+        map1.raw_set_map_id(5);
+        let h = map1.insert(Foobar(3));
+        assert_eq!(h.meta(), map1.map_id());
+        assert_eq!(h.meta(), 5);
     }
 
     #[test]
@@ -945,6 +953,34 @@ mod tests {
             // It's still a stale version, even though the index is occupied again.
             assert_eq!(map.get(h0), None);
             assert_eq!(map.get(h1).unwrap(), &Foobar(i + 2050));
+        }
+    }
+    #[test]
+    fn test_reserve() {
+        let mut map = HandleMap::with_capacity(10);
+        let mut handles = alloc::vec![];
+        for i in 0..10 {
+            handles.push(map.insert(Foobar(i)))
+        }
+        map.reserve(0);
+        for i in 0..10 {
+            handles.push(map.insert(Foobar(i + 10)))
+        }
+        
+        map.reserve(map.capacity());
+        for (i, &h) in handles.iter().enumerate() {
+            assert_eq!(map[h], Foobar(i));
+            assert_eq!(map.remove(h).unwrap(), Foobar(i));
+        }
+        let mut handles2 = alloc::vec![];
+        for i in 20..30 {
+            let h = map.insert(Foobar(i));
+            handles2.push(h);
+        }
+        map.reserve(50);
+        for (i, (&h0, h1)) in handles.iter().zip(handles2).enumerate() {
+            assert_eq!(map.get(h0), None);
+            assert_eq!(map.get(h1).unwrap(), &Foobar(i + 20));
         }
     }
 
@@ -1056,5 +1092,14 @@ mod tests {
             assert_eq!(m.find_handle(&i), None);
             assert!(!m.contains_key(*h));
         }
+    }
+    #[test]
+    fn test_dbg() {
+        let mut m = HandleMap::new_with_map_id(0);
+        m.insert(0u32);
+        assert_eq!(
+            alloc::format!("{:?}", m),
+            "HandleMap { id: 0, entries: {Handle { meta: 0, generation: 2, index: 0 }: 0} }"
+        );
     }
 }

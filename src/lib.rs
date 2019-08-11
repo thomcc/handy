@@ -46,7 +46,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, Ordering};
 
-
 /// A collection that tells *you* what your value's key should be.
 ///
 /// When inserting a value, it gives you back a [`Handle`] which can be used to
@@ -226,6 +225,32 @@ impl<T> HandleMap<T> {
     pub fn get_mut(&mut self, handle: Handle) -> Option<&mut T> {
         self.handle_check_mut(handle)
             .and_then(|e| e.payload.as_mut())
+    }
+
+    /// Returns true if the handle refers to an item present in this map.
+    #[inline]
+    pub fn contains_key(&self, h: Handle) -> bool {
+        self.get(h).is_some()
+    }
+
+    /// Search the map for `item`, and if it's found, return a handle to it.
+    ///
+    /// If more than one value compare as equal to `item`, it's not specified
+    /// which we will return.
+    ///
+    /// Note that this is a naive O(n) search, so if you want this often, you
+    /// might want to store the handle as a field on the value.
+    #[inline]
+    pub fn find_handle(&self, item: &T) -> Option<Handle>
+    where
+        T: PartialEq,
+    {
+        for (i, e) in self.entries.iter().enumerate() {
+            if e.payload.as_ref() == Some(item) {
+                return Some(Handle::from_parts(i as u32, e.gen, self.id));
+            }
+        }
+        None
     }
 
     /// Reserve space for `sz` additional items.
@@ -771,4 +796,22 @@ mod tests {
         }
         (map, handles)
     }
+    #[test]
+    fn test_find() {
+        let mut m = HandleMap::new();
+        let mut v = alloc::vec![];
+        for i in 0..10usize {
+            v.push(m.insert(i));
+        }
+        for (i, h) in v.iter().enumerate() {
+            assert_eq!(m.find_handle(&i), Some(*h));
+            assert!(m.contains_key(*h));
+        }
+        m.clear();
+        for (i, h) in v.iter().enumerate() {
+            assert_eq!(m.find_handle(&i), None);
+            assert!(!m.contains_key(*h));
+        }
+    }
+
 }

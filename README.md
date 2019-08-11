@@ -1,13 +1,13 @@
-# `handy`: Handles are handy.
+# `handy`: handles and handle maps.
 
 [![Docs](https://docs.rs/handy/badge.svg)](https://docs.rs/handy) [![CircleCI](https://circleci.com/gh/thomcc/handy.svg?style=svg)](https://circleci.com/gh/thomcc/handy) [![codecov](https://codecov.io/gh/thomcc/handy/branch/master/graph/badge.svg)](https://codecov.io/gh/thomcc/handy)
 
-`handy` provides handles and handle maps. This is a fairly useful data
-structure for rust code, since it can help you work around borrow checker
+`handy` provides handles and handle maps for rust code. This is a fairly useful
+data structure for rust code, since it can help you work around borrow checker
 issues.
 
 Essentially, `Handle` and `HandleMap` are a more robust version of the
-pattern where instead of storing a reference to a &T directly, you instead
+pattern where instead of storing a reference to a `&T` directly, you instead
 store a `usize` which indicates where it is in some `Vec`. I claim they're
 more robust because:
 
@@ -45,8 +45,8 @@ There are a whole bunch.
 
 TLDR: MIT / Apache2 like every other Rust library.
 
-This code shares common legacy with some of the types in
-https://crates.io/crates/ffi-support. After all, I wrote that library too. I
+This code shares common legacy with the Handle/HandleMap types from
+https://crates.io/crates/ffi-support (After all, I wrote that library too). I
 also stole the test code more or less directly from that crate. Because of that,
 this library has the exact same license, down to the copyright assignment to
 Mozilla.

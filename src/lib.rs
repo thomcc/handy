@@ -1,9 +1,9 @@
 #![no_std]
 #![allow(clippy::let_and_return)]
-#![deny(unsafe_code, missing_docs)]
+// #![deny(unsafe_code, missing_docs)]
 //! # `handy`
 //!
-//! `handy` provides handles and handle maps. This is a fairly useful data
+//! `handy` provides handles, handle maps, etc. This is a fairly useful data
 //! structure for rust code, since it can help you work around borrow checker
 //! issues.
 //!
@@ -16,8 +16,19 @@
 //!   that provided it.
 //!
 //! - If you remove an item from the HandleMap, the handle map won't let you use
-//!   the stale handle to get whatever value happens to be in that slot at the
+//!   the stale handle to get whatever value happens to be in that index at the
 //!   time.
+//!
+//! ## Usage Example
+//!
+//! ```
+//! # use handy::HandleMap;
+//! let mut m = HandleMap::new();
+//! let h0 = m.insert(3u32);
+//! assert_eq!(m[h0], 3);
+//! m.remove(h0);
+//! assert_eq!(m.get(h0), None);
+//! ```
 //!
 //! # Similar crates
 //!
@@ -45,12 +56,15 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, Ordering};
+mod halloc;
+
+pub use halloc::HandleAlloc;
 
 /// A collection that tells *you* what your value's key should be.
 ///
 /// When inserting a value, it gives you back a [`Handle`] which can be used to
-/// fetch that value at later time. Other than that, it's somewhat similar
-/// to other collection types.
+/// fetch that value at later time. Other than that, it's somewhat similar to
+/// other collection types.
 ///
 /// # Example
 /// ```
@@ -69,6 +83,7 @@ pub struct HandleMap<T> {
     entries: Vec<Entry<T>>,
     len: usize,
     next: Option<u32>,
+    end_of_list: Option<u32>,
     id: u16,
 }
 
@@ -83,13 +98,19 @@ static SOURCE_ID: AtomicU16 = AtomicU16::new(1);
 
 impl<T> HandleMap<T> {
     /// Create a new handle map.
+    #[inline]
     pub fn new() -> Self {
+        Self::new_with_map_id(SOURCE_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    #[inline]
+    pub(crate) fn new_with_map_id(id: u16) -> Self {
         Self {
             entries: Vec::new(),
             len: 0,
             next: None,
-            // end: 0,
-            id: SOURCE_ID.fetch_add(1, Ordering::Relaxed),
+            end_of_list: None,
+            id,
         }
     }
 
@@ -105,18 +126,41 @@ impl<T> HandleMap<T> {
     }
 
     /// Get the number of entries we can hold before reallocation
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.entries.len()
     }
 
     /// Get the number of occupied entries.
+    #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// Returns true if our length is zero
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Get the id of this map, which is used to validate handles.
+    ///
+    /// This is typically not needed except for debugging and advanced usage.
+    #[inline]
+    pub fn map_id(&self) -> u16 {
+        self.id
+    }
+
+    /// Set the id of this map, which is used to validate handles (See
+    /// [`Handle`] documentation for more details).
+    ///
+    /// # Warning
+    /// Doing so will cause the map to fail to recognize handles that it
+    /// previously returned, and probably other problems! You're recommended
+    /// against using it unless you know what you're doing!
+    #[inline]
+    pub fn raw_set_map_id(&mut self, v: u16) {
+        self.id = v;
     }
 
     /// Add a new item, returning a handle to it.
@@ -134,7 +178,7 @@ impl<T> HandleMap<T> {
         }
         self.next = core::mem::replace(&mut e.next, None);
         self.len += 1;
-        let res = Handle::from_parts(index as u32, e.gen, self.id);
+        let res = Handle::from_raw_parts(index, e.gen, self.id);
         #[cfg(test)]
         {
             self.assert_valid();
@@ -149,25 +193,11 @@ impl<T> HandleMap<T> {
     ///
     /// - The handle comes from a different map.
     /// - The item it referenced has been removed already.
-    /// - It appears corrupt in some other way (For example, it's Handle::default())
+    /// - It appears corrupt in some other way (For example, it's
+    ///   `Handle::default()`, or comes from a dubious `Handle::from_raw_*`)
     pub fn remove(&mut self, handle: Handle) -> Option<T> {
         self.handle_check_mut(handle)?;
-        let index = handle.index();
-        let mut e = &mut self.entries[index as usize];
-        e.gen = e.gen.wrapping_add(1);
-        if e.gen == 0 {
-            e.gen = 1;
-        }
-        debug_assert!(e.next.is_none());
-        e.next = self.next;
-        self.next = Some(index);
-        self.len -= 1;
-        let r = e.payload.take();
-        #[cfg(test)]
-        {
-            self.assert_valid();
-        }
-        r
+        self.raw_remove(handle.index())
     }
 
     /// Remove all entries in this handle map.
@@ -185,15 +215,17 @@ impl<T> HandleMap<T> {
                 e.gen = 1;
             }
         };
-        update_gen(&mut self.entries[0]);
-        self.entries[0].payload = None;
-        self.entries[0].next = None;
-        for i in 1..self.entries.len() {
+        for i in 0..(self.entries.len() - 1) {
             update_gen(&mut self.entries[i]);
-            self.entries[i].next = Some((i - 1) as u32);
+            self.entries[i].next = Some((i + 1) as u32);
             self.entries[i].payload = None;
         }
-        self.next = Some((self.entries.len() - 1) as u32);
+        let mut end = self.entries.last_mut().unwrap();
+        update_gen(&mut end);
+        end.next = None;
+        end.payload = None;
+        self.next = Some(0);
+        self.end_of_list = Some((self.entries.len() - 1) as u32);
         self.len = 0;
         #[cfg(test)]
         {
@@ -209,7 +241,7 @@ impl<T> HandleMap<T> {
     /// - The handle comes from a different map.
     /// - The item it referenced has been removed already.
     /// - It appears corrupt in some other way (For example, it's
-    ///   Handle::default())
+    ///   `Handle::default()`, or comes from a dubious `Handle::from_raw_*`)
     #[inline]
     pub fn get(&self, handle: Handle) -> Option<&T> {
         self.handle_check(handle).and_then(|e| e.payload.as_ref())
@@ -223,7 +255,7 @@ impl<T> HandleMap<T> {
     /// - The handle comes from a different map.
     /// - The item it referenced has been removed already.
     /// - It appears corrupt in some other way (For example, it's
-    ///   Handle::default())
+    ///   `Handle::default()`, or comes from a dubious `Handle::from_raw_*`)
     #[inline]
     pub fn get_mut(&mut self, handle: Handle) -> Option<&mut T> {
         self.handle_check_mut(handle)
@@ -250,7 +282,7 @@ impl<T> HandleMap<T> {
     {
         for (i, e) in self.entries.iter().enumerate() {
             if e.payload.as_ref() == Some(item) {
-                return Some(Handle::from_parts(i as u32, e.gen, self.id));
+                return Some(Handle::from_raw_parts(i, e.gen, self.id));
             }
         }
         None
@@ -265,6 +297,7 @@ impl<T> HandleMap<T> {
     ///
     /// See also `iter_with_handles` if you want the handles during
     /// iteration.
+    #[inline]
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a T> + 'a {
         self.entries.iter().filter_map(|e| e.payload.as_ref())
     }
@@ -273,22 +306,25 @@ impl<T> HandleMap<T> {
     ///
     /// See also `iter_mut_with_handles` if you want the handles during
     /// iteration.
+    #[inline]
     pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T> + 'a {
         self.entries.iter_mut().filter_map(|e| e.payload.as_mut())
     }
 
     /// Get an iterator over every occupied slot of this map, as well as a
     /// handle which can be used to fetch them later.
+    #[inline]
     pub fn iter_with_handles<'a>(&'a self) -> impl Iterator<Item = (Handle, &'a T)> + 'a {
         self.entries.iter().enumerate().filter_map(move |(i, e)| {
             e.payload
                 .as_ref()
-                .map(|p| (Handle::from_parts(i as u32, e.gen, self.id), p))
+                .map(|p| (Handle::from_raw_parts(i, e.gen, self.id), p))
         })
     }
 
     /// Get a mut iterator over every occupied slot of this map, as well as a
     /// handle which can be used to fetch them later.
+    #[inline]
     pub fn iter_mut_with_handles<'a>(
         &'a mut self,
     ) -> impl Iterator<Item = (Handle, &'a mut T)> + 'a {
@@ -300,23 +336,36 @@ impl<T> HandleMap<T> {
                 let gen = e.gen;
                 e.payload
                     .as_mut()
-                    .map(|p| (Handle::from_parts(i as u32, gen, id), p))
+                    .map(|p| (Handle::from_raw_parts(i, gen, id), p))
             })
+    }
+
+    /// If `index` refers to an occupied entry, return a `Handle` to it.
+    /// Otherwise, return None.
+    #[inline]
+    pub fn handle_for_index(&self, index: usize) -> Option<Handle> {
+        let e = self.entries.get(index)?;
+        if e.payload.is_some() {
+            debug_assert!((e.gen & 1) == 0 && (e.gen != 0));
+            Some(Handle::from_raw_parts(index, e.gen, self.id))
+        } else {
+            None
+        }
     }
 
     #[inline]
     fn handle_check(&self, handle: Handle) -> Option<&Entry<T>> {
-        if handle.source() != self.id {
+        if handle.meta() != self.id {
             unlikely_hint();
             return None;
         }
-        let i = handle.index() as usize;
+        let i = handle.index();
         if i >= self.entries.len() {
             unlikely_hint();
             return None;
         }
         let e = &self.entries[i];
-        let gen = handle.gen();
+        let gen = handle.generation();
         if e.gen != gen || (gen & 1) != 0 {
             unlikely_hint();
             None
@@ -327,17 +376,17 @@ impl<T> HandleMap<T> {
 
     #[inline]
     fn handle_check_mut(&mut self, handle: Handle) -> Option<&mut Entry<T>> {
-        if handle.source() != self.id {
+        if handle.meta() != self.id {
             unlikely_hint();
             return None;
         }
-        let i = handle.index() as usize;
+        let i = handle.index();
         if i >= self.entries.len() {
             unlikely_hint();
             return None;
         }
         let e = &mut self.entries[i];
-        let gen = handle.gen();
+        let gen = handle.generation();
         if e.gen != gen || (gen & 1) != 0 {
             unlikely_hint();
             None
@@ -367,35 +416,42 @@ impl<T> HandleMap<T> {
         if need <= self.capacity() {
             return self.next.expect("bug") as usize;
         }
-        let cap = (self.capacity() * 2).max(need).max(16);
+        let cap = (self.capacity() * 2).max(need).max(8);
         assert!(cap <= i32::max_value() as usize, "Capacity overflow");
 
         self.entries.reserve(cap - self.entries.len());
-        // If we're empty, this adds the first entry and free list tail.
-        // Otherwise, it lets us use simpler computation in the extend call
-        // below. Win/win.
-        self.entries.push(Entry {
-            next: self.next,
-            payload: None,
-            gen: 1,
-        });
 
         let current_cap = self.capacity();
-        self.entries.extend((current_cap..cap).map(|i| Entry {
-            next: Some((i - 1) as u32),
+        self.entries.extend((current_cap..(cap - 1)).map(|i| Entry {
+            next: Some((i + 1) as u32),
             payload: None,
             gen: 1,
         }));
-        let next = (self.entries.len() - 1) as u32;
-        self.next = Some(next);
+
+        self.entries.push(Entry {
+            next: None,
+            payload: None,
+            gen: 1,
+        });
+        if self.next.is_none() {
+            self.next = Some(current_cap as u32);
+            self.end_of_list = Some((self.entries.len() - 1) as u32);
+        } else {
+            let end = self.end_of_list.unwrap();
+            let ee = &mut self.entries[end as usize];
+            debug_assert!(ee.payload.is_none());
+            ee.next = Some(current_cap as u32);
+            self.end_of_list = Some((self.entries.len() - 1) as u32);
+        }
         #[cfg(test)]
         {
             self.assert_valid();
         }
-        next as usize
+        current_cap as usize
     }
 
     #[cfg(test)]
+    #[allow(clippy::cognitive_complexity)]
     fn assert_valid(&self) {
         if self.entries.is_empty() {
             return;
@@ -418,8 +474,24 @@ impl<T> HandleMap<T> {
             .iter()
             .filter(|e| e.next.is_none() && e.payload.is_none())
             .count();
-        assert!(number_of_ends <= 1);
-
+        if self.capacity() != 0 {
+            let end = self.end_of_list.expect("Should have end") as usize;
+            assert_eq!(self.entries[end].next, None);
+            if self.capacity() == self.len() {
+                assert!(self.entries[end].payload.is_some());
+                assert_eq!(number_of_ends, 0);
+            } else {
+                assert!(self.entries[end].payload.is_none());
+                assert_eq!(number_of_ends, 1);
+            }
+        } else {
+            assert_eq!(number_of_ends, 0);
+        }
+        if self.next.is_none() {
+            assert!(self.entries[self.end_of_list.unwrap() as usize]
+                .payload
+                .is_some());
+        }
         // Check that the free list hits every unoccupied item.
         // The tuple is: `(should_be_in_free_list, is_in_free_list)`.
         let mut free_indices = alloc::vec![(false, false); self.capacity()];
@@ -456,6 +528,9 @@ impl<T> HandleMap<T> {
 
             assert!(self.entries[ni].payload.is_none());
             next = self.entries[ni].next;
+            if next.is_none() {
+                assert_eq!(Some(ni as u32), self.end_of_list);
+            }
         }
 
         let mut occupied_count = 0;
@@ -473,6 +548,39 @@ impl<T> HandleMap<T> {
             self.len, occupied_count,
             "len doesn't reflect the actual number of entries"
         );
+    }
+
+    /// Directly query the value of the generation at that index.
+    ///
+    /// If `index` is greater then `self.capacity()`, then this returns None.
+    ///
+    /// Advanced usage note: Even generations always indicate an occupied index,
+    /// except for 0, which is never a valid generation.
+    ///
+    /// # Caveat
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to call this function, however doing so is harmless.
+    #[inline]
+    pub fn raw_generation_for_index(&self, index: usize) -> Option<u16> {
+        self.entries.get(index).map(|e| e.gen)
+    }
+
+    pub(crate) fn raw_remove(&mut self, index: usize) -> Option<T> {
+        let mut e = &mut self.entries[index];
+        e.gen = e.gen.wrapping_add(1);
+        if e.gen == 0 {
+            e.gen = 1;
+        }
+        e.next = self.next;
+        self.next = Some(index as u32);
+        self.len -= 1;
+        let r = e.payload.take();
+        debug_assert!(r.is_some());
+        #[cfg(test)]
+        {
+            self.assert_valid();
+        }
+        r
     }
 }
 
@@ -534,37 +642,156 @@ struct Entry<T> {
 
 /// An untyped reference to some value. Handles are just a fancy u64.
 ///
-/// Internally they store:
+/// Internally these store:
 ///
-/// - The index into the map.
-/// - The ID of their map.
-/// - The 'generation' of that index (this is incremented both when an item is
-///   removed from the index, and when another is inserted).
+/// - A 32-bit index field.
+/// - The 16-bit 'generation' of that index (this is incremented both when an
+///   item is removed from the index, and when another is inserted).
+/// - An extra value typically used to store the ID of their map.
+///
+/// They're a #[repr(transparent)] wrapper around a u64, so if they need to be
+/// passed into C code over the FFI, that can be done directly.
+///
+/// # Advanced Details
+///
+/// Typical use of this library expects that you just treat these as opaque,
+/// however you're free to inspect and construct them as you please (with
+/// `from_raw` and `from_raw_parts`), with the caveat that using the API to do
+/// so could cause the map to return non-sensical answers.
+///
+/// That said, should you want to do so, you absolutely can.
+///
+/// Some important notes if you're going to construct these:
+///
+/// - Valid indices should always be between 0 and i32::max_value.
+///
+/// - Generations for occupied indexs have a even value, and for empty indexs
+///   have an odd value. The zero generation is always skipped, and is never
+///   considered valid.
+///
+/// - If used with a HandleMap, the `meta` value must match the map they came
+///   from.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Handle(u64);
 
 impl Handle {
-    /// A constant for the null handle. Never valid or returned by any map.
-    pub const EMPTY: Handle = Handle(0);
+    /// A constant for the default (null) handle. Never valid or returned by any
+    /// map.
+    pub const EMPTY: Handle = Handle::from_raw(0);
 
+    /// Returns the index value of this handle.
+    ///
+    /// While a usize is returned, this value is guaranteed to be 32 bits.
+    ///
+    /// # Caveat
+    ///
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to access this value, however doing so is harmless.
     #[inline]
-    pub(crate) const fn index(self) -> u32 {
-        self.0 as u32
+    pub const fn index(self) -> usize {
+        (self.0 as u32) as usize
     }
+
+    /// Returns the generation value of this handle.
+    ///
+    /// # Caveat
+    ///
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to access this value, however doing so is harmless.
     #[inline]
-    pub(crate) const fn gen(self) -> u16 {
+    pub const fn generation(self) -> u16 {
         (self.0 >> 48) as u16
     }
 
+    /// Returns the metadata field of this handle.
+    ///
+    /// If used with a [`HandleMap`] (instead of directly coming from a
+    /// [`HandleAlloc`]), this is the `id` of the `HandleMap` which constructed
+    /// this handle. If used with a HandleAlloc, then the value has no meaning
+    /// aside from whatever you assign to it -- it's 16 free bits you can use
+    /// for whatever tagging you want.
+    ///
+    /// # Caveat
+    ///
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to access this value, however doing so is harmless.
     #[inline]
-    pub(crate) const fn source(self) -> u16 {
+    pub const fn meta(self) -> u16 {
         (self.0 >> 32) as u16
     }
 
+    /// Construct a handle from the separate parts.
+    ///
+    /// # Warning
+    /// This is a feature intended for advanced usage. An attempt is made to
+    /// cope with dubious handles, but it's almost certainly possible to pierce
+    /// the abstraction veil of the HandleMap if you use this.
+    ///
+    /// However, it should not be possible to cause memory unsafety -- this
+    /// crate has no unsafe code.
     #[inline]
     #[allow(clippy::cast_lossless)] // const fn
-    pub(crate) const fn from_parts(index: u32, gen: u16, source: u16) -> Self {
-        Handle((index as u64) | ((source as u64) << 32) | ((gen as u64) << 48))
+    pub const fn from_raw_parts(index: usize, generation: u16, meta: u16) -> Self {
+        Handle((index as u32 as u64) | ((meta as u64) << 32) | ((generation as u64) << 48))
+    }
+
+    /// Construct a handle from it's internal `u64` value.
+    ///
+    /// # Layout
+    ///
+    /// The 64 bit value is interpreted as such. It's recommended that you
+    /// instead use `from_raw_parts` to construct these in cases where this is
+    /// relevant, though.
+    ///
+    /// ```text
+    /// [16 bits of generation | 16 bits of map id | 32 bit index]
+    /// MSB                                                    LSB
+    /// ```
+    ///
+    /// # Warning
+    ///
+    /// This is a feature intended for advanced usage. An attempt is made to
+    /// cope with dubious handles, but it's almost certainly possible to pierce
+    /// the abstraction veil of the HandleMap if you use this.
+    ///
+    /// However, it should not be possible to cause memory unsafety -- this
+    /// crate has no unsafe code.
+    #[inline]
+    pub const fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Get the internal u64 representation of this handle.
+    ///
+    /// # Caveat
+    ///
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to access this value, however doing so is harmless.
+    ///
+    /// # Layout
+    ///
+    /// The layout of the returned value is as such:
+    ///
+    /// ```text
+    /// [16 bits of generation | 16 bits of map id | 32 bit index]
+    /// MSB                                                    LSB
+    /// ```
+    #[inline]
+    pub const fn into_raw(self) -> u64 {
+        self.0
+    }
+
+    /// Get the internal parts of this handle.
+    ///
+    /// Equivalent to `(self.index(), self.generation(), self.meta())`
+    ///
+    /// # Caveat
+    ///
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to access this value, however doing so is harmless.
+    #[inline]
+    pub fn decompose(self) -> (u32, u16, u16) {
+        (self.index() as u32, self.generation(), self.meta())
     }
 }
 
@@ -594,8 +821,8 @@ where
 impl core::fmt::Debug for Handle {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Handle")
-            .field("map_id", &self.source())
-            .field("gen", &self.gen())
+            .field("meta", &self.meta())
+            .field("generation", &self.generation())
             .field("index", &self.index())
             .finish()
     }
@@ -607,30 +834,30 @@ mod tests {
 
     #[test]
     fn test_handle_parts() {
-        let h = Handle::from_parts(0, 0, 0);
+        let h = Handle::from_raw_parts(0, 0, 0);
         assert_eq!(h.index(), 0);
-        assert_eq!(h.gen(), 0);
-        assert_eq!(h.source(), 0);
+        assert_eq!(h.generation(), 0);
+        assert_eq!(h.meta(), 0);
 
-        let h = Handle::from_parts(!0, 0, 0);
-        assert_eq!(h.index(), !0u32);
-        assert_eq!(h.gen(), 0);
-        assert_eq!(h.source(), 0);
+        let h = Handle::from_raw_parts(!0, 0, 0);
+        assert_eq!(h.index(), (!0u32) as usize);
+        assert_eq!(h.generation(), 0);
+        assert_eq!(h.meta(), 0);
 
-        let h = Handle::from_parts(0, !0, 0);
+        let h = Handle::from_raw_parts(0, !0, 0);
         assert_eq!(h.index(), 0);
-        assert_eq!(h.gen(), !0);
-        assert_eq!(h.source(), 0);
+        assert_eq!(h.generation(), !0);
+        assert_eq!(h.meta(), 0);
 
-        let h = Handle::from_parts(0, 0, !0);
+        let h = Handle::from_raw_parts(0, 0, !0);
         assert_eq!(h.index(), 0);
-        assert_eq!(h.gen(), 0);
-        assert_eq!(h.source(), !0);
+        assert_eq!(h.generation(), 0);
+        assert_eq!(h.meta(), !0);
 
-        let h = Handle::from_parts(!0, !0, !0);
-        assert_eq!(h.index(), !0);
-        assert_eq!(h.gen(), !0);
-        assert_eq!(h.source(), !0);
+        let h = Handle::from_raw_parts(!0, !0, !0);
+        assert_eq!(h.index(), (!0u32) as usize);
+        assert_eq!(h.generation(), !0);
+        assert_eq!(h.meta(), !0);
     }
 
     #[derive(PartialEq, Debug, Clone, Copy)]
@@ -684,7 +911,7 @@ mod tests {
     #[test]
     fn test_bad_index() {
         let map: HandleMap<Foobar> = HandleMap::new();
-        assert_eq!(map.get(Handle::from_parts(100, 2, map.id)), None);
+        assert_eq!(map.get(Handle::from_raw_parts(100, 2, map.id)), None);
     }
 
     #[test]
@@ -715,7 +942,7 @@ mod tests {
             handles2.push(h);
         }
         for (i, (&h0, h1)) in handles.iter().zip(handles2).enumerate() {
-            // It's still a stale version, even though the slot is occupied again.
+            // It's still a stale version, even though the index is occupied again.
             assert_eq!(map.get(h0), None);
             assert_eq!(map.get(h1).unwrap(), &Foobar(i + 2050));
         }
@@ -830,5 +1057,4 @@ mod tests {
             assert!(!m.contains_key(*h));
         }
     }
-
 }

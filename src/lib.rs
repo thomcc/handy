@@ -570,9 +570,10 @@ impl<T> HandleMap<T> {
     ///
     /// ## Example
     /// ```
+    /// # use handy::HandleMap;
     /// let mut m: HandleMap<u32> = HandleMap::new();
     /// let h = m.insert(10u32);
-    /// assert_eq!(m.raw_value_at_index(h.index()), Some(10));
+    /// assert_eq!(m.raw_value_at_index(h.index()), Some(&10));
     /// ```
     ///
     /// # Caveat
@@ -589,6 +590,7 @@ impl<T> HandleMap<T> {
     ///
     /// ## Example
     /// ```
+    /// # use handy::HandleMap;
     /// let mut m: HandleMap<u32> = HandleMap::new();
     /// let h = m.insert(10u32);
     /// *m.raw_mut_value_at_index(h.index()).unwrap() = 11;
@@ -599,7 +601,7 @@ impl<T> HandleMap<T> {
     /// do not need to call this function.
     #[inline]
     pub fn raw_mut_value_at_index(&mut self, index: usize) -> Option<&mut T> {
-        self.entries.get(index).and_then(|v| v.payload.as_mut())
+        self.entries.get_mut(index).and_then(|v| v.payload.as_mut())
     }
 
     #[inline]

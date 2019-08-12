@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(clippy::let_and_return)]
-// #![deny(unsafe_code, missing_docs)]
+#![deny(unsafe_code, missing_docs)]
 //! # `handy`
 //!
 //! `handy` provides handles, handle maps, etc. This is a fairly useful data
@@ -57,6 +57,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, Ordering};
 mod halloc;
+
+pub mod typed;
 
 pub use halloc::HandleAlloc;
 
@@ -864,7 +866,7 @@ mod tests {
     }
 
     #[derive(PartialEq, Debug, Clone, Copy)]
-    struct Foobar(usize);
+    pub(crate) struct Foobar(pub(crate) usize);
 
     #[test]
     fn test_correct_value_single() {
@@ -1057,7 +1059,7 @@ mod tests {
         assert_eq!(count, handles.len());
     }
 
-    fn mixed_handlemap() -> (HandleMap<Foobar>, Vec<(Handle, usize)>) {
+    pub(crate) fn mixed_handlemap() -> (HandleMap<Foobar>, Vec<(Handle, usize)>) {
         let mut handles = alloc::vec![];
         let mut map = HandleMap::with_capacity(10);
         let mut c = 0;

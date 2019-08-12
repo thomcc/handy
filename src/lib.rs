@@ -157,12 +157,14 @@ impl<T> HandleMap<T> {
         a
     }
 
-    /// Get the number of entries we can hold before reallocation
+    /// Get the number of entries we can hold before reallocation.
+    ///
     /// ## Example
     /// ```
     /// # use handy::HandleMap;
-    /// let m: HandleMap<u32> = HandleMap::with_capacity(10);
-    /// assert!(m.capacity() >= 10);
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// m.insert(10);
+    /// assert!(m.capacity() >= 1);
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -560,6 +562,44 @@ impl<T> HandleMap<T> {
         } else {
             None
         }
+    }
+
+    /// Access the value at the provided index, whatever it happens to be.
+    ///
+    /// Returns none if `index` >= `capacity()` or if the index is unoccupied.
+    ///
+    /// ## Example
+    /// ```
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.raw_value_at_index(h.index()), Some(10));
+    /// ```
+    ///
+    /// # Caveat
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to call this function.
+    #[inline]
+    pub fn raw_value_at_index(&self, index: usize) -> Option<&T> {
+        self.entries.get(index).and_then(|v| v.payload.as_ref())
+    }
+
+    /// Access the value at the provided index, whatever it happens to be.
+    ///
+    /// Returns none if `index` >= `capacity()` or if the index is unoccupied.
+    ///
+    /// ## Example
+    /// ```
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// *m.raw_mut_value_at_index(h.index()).unwrap() = 11;
+    /// assert_eq!(m[h], 11);
+    /// ```
+    /// # Caveat
+    /// This is a low level feature intended for advanced usage, typically you
+    /// do not need to call this function.
+    #[inline]
+    pub fn raw_mut_value_at_index(&mut self, index: usize) -> Option<&mut T> {
+        self.entries.get(index).and_then(|v| v.payload.as_mut())
     }
 
     #[inline]

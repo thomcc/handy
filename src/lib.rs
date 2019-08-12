@@ -3,11 +3,11 @@
 #![deny(unsafe_code, missing_docs)]
 //! # `handy`
 //!
-//! `handy` provides handles, handle maps, etc. This is a fairly useful data
-//! structure for rust code, since it can help you work around borrow checker
-//! issues.
+//! `handy` provides handles and handle maps. A handle map is a fairly useful
+//! data structure for rust code, since it can help you work around borrow
+//! checker issues.
 //!
-//! Essentially, `Handle` and `HandleMap` are a more robust version of the
+//! Essentially, [`Handle`] and [`HandleMap`] are a more robust version of the
 //! pattern where instead of storing a reference to a &T directly, you instead
 //! store a `usize` which indicates where it is in some `Vec`. I claim they're
 //! more robust because:
@@ -62,11 +62,23 @@ pub mod typed;
 
 pub use halloc::HandleAlloc;
 
-/// A collection that tells *you* what your value's key should be.
+/// `HandleMap`s are a collection data structure that allow you to reference
+/// their members by using a opaque handle.
 ///
-/// When inserting a value, it gives you back a [`Handle`] which can be used to
-/// fetch that value at later time. Other than that, it's somewhat similar to
-/// other collection types.
+/// In rust code, you often use these handles as a sort of lifetime-less
+/// reference. `Handle` is a paper-thin wrapper around a `u64`, so it is `Copy +
+/// Send + Sync + Eq + Ord + ...` even if `T` (or even `&T`) wouldn't be,
+/// however you need access to the map in order to read the value.
+///
+/// This is probably starting to sound like `HandleMap` is just a `Vec`, and
+/// `Handle` is just `usize`, but unlike `usize`:
+///
+/// - a `HandleMap` can tell if you try to use a `Handle` from a different map
+///   to access one of it's values.
+///
+/// - a `HandleMap` tracks insertion/removal of the value at each index, will
+///   know if you try to use a handle to get a value that was removed, even if
+///   another value occupies the same index.
 ///
 /// # Example
 /// ```
@@ -100,6 +112,14 @@ static SOURCE_ID: AtomicU16 = AtomicU16::new(1);
 
 impl<T> HandleMap<T> {
     /// Create a new handle map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let m: HandleMap<u32> = HandleMap::new();
+    /// // No allocation is performed by default.
+    /// assert_eq!(m.capacity(), 0);
+    /// ```
     #[inline]
     pub fn new() -> Self {
         Self::new_with_map_id(SOURCE_ID.fetch_add(1, Ordering::Relaxed))
@@ -116,7 +136,17 @@ impl<T> HandleMap<T> {
         }
     }
 
-    /// Create a new handle map with the specified capacity.
+    /// Create a new handle map with at least the specified capacity.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let m: HandleMap<u32> = HandleMap::with_capacity(10);
+    /// // Note that we don't guarantee the capacity will be exact.
+    /// // (though in practice it will so long as the requested
+    /// // capacity is >= 8)
+    /// assert!(m.capacity() >= 10);
+    /// ```
     pub fn with_capacity(c: usize) -> Self {
         let mut a = Self::new();
         if c == 0 {
@@ -128,18 +158,40 @@ impl<T> HandleMap<T> {
     }
 
     /// Get the number of entries we can hold before reallocation
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let m: HandleMap<u32> = HandleMap::with_capacity(10);
+    /// assert!(m.capacity() >= 10);
+    /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
         self.entries.len()
     }
 
     /// Get the number of occupied entries.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// assert_eq!(m.len(), 0);
+    /// m.insert(10u32);
+    /// assert_eq!(m.len(), 1);
+    /// ```
     #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// Returns true if our length is zero
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// assert!(m.is_empty());
+    /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
@@ -148,6 +200,13 @@ impl<T> HandleMap<T> {
     /// Get the id of this map, which is used to validate handles.
     ///
     /// This is typically not needed except for debugging and advanced usage.
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.map_id(), h.map_id());
+    /// ```
     #[inline]
     pub fn map_id(&self) -> u16 {
         self.id
@@ -166,6 +225,14 @@ impl<T> HandleMap<T> {
     }
 
     /// Add a new item, returning a handle to it.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m[h], 10);
+    /// ```
     pub fn insert(&mut self, value: T) -> Handle {
         let index = self.get_next();
         let mut e = &mut self.entries[index];
@@ -197,12 +264,33 @@ impl<T> HandleMap<T> {
     /// - The item it referenced has been removed already.
     /// - It appears corrupt in some other way (For example, it's
     ///   `Handle::default()`, or comes from a dubious `Handle::from_raw_*`)
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// // Present:
+    /// assert_eq!(m.remove(h), Some(10));
+    /// // Not present:
+    /// assert_eq!(m.remove(h), None);
+    /// ```
     pub fn remove(&mut self, handle: Handle) -> Option<T> {
         self.handle_check_mut(handle)?;
         self.raw_remove(handle.index())
     }
 
     /// Remove all entries in this handle map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// m.clear();
+    /// assert_eq!(m.len(), 0);
+    /// assert_eq!(m.get(h), None);
+    /// ```
     pub fn clear(&mut self) {
         if self.entries.is_empty() {
             return;
@@ -244,6 +332,16 @@ impl<T> HandleMap<T> {
     /// - The item it referenced has been removed already.
     /// - It appears corrupt in some other way (For example, it's
     ///   `Handle::default()`, or comes from a dubious `Handle::from_raw_*`)
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.get(h), Some(&10));
+    /// m.remove(h);
+    /// assert_eq!(m.get(h), None);
+    /// ```
     #[inline]
     pub fn get(&self, handle: Handle) -> Option<&T> {
         self.handle_check(handle).and_then(|e| e.payload.as_ref())
@@ -258,6 +356,18 @@ impl<T> HandleMap<T> {
     /// - The item it referenced has been removed already.
     /// - It appears corrupt in some other way (For example, it's
     ///   `Handle::default()`, or comes from a dubious `Handle::from_raw_*`)
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// *m.get_mut(h).unwrap() += 1;
+    /// assert_eq!(m[h], 11);
+    /// // Note: The following is equivalent if you're going to `unwrap` the result of get_mut:
+    /// m[h] += 1;
+    /// assert_eq!(m[h], 12);
+    /// ```
     #[inline]
     pub fn get_mut(&mut self, handle: Handle) -> Option<&mut T> {
         self.handle_check_mut(handle)
@@ -265,6 +375,35 @@ impl<T> HandleMap<T> {
     }
 
     /// Returns true if the handle refers to an item present in this map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert!(m.contains(h));
+    /// m.remove(h);
+    /// assert!(!m.contains(h));
+    /// ```
+    #[inline]
+    pub fn contains(&self, h: Handle) -> bool {
+        self.get(h).is_some()
+    }
+
+    /// Returns true if the handle refers to an item present in this map.
+    ///
+    /// This is equivalent to [`HandleMap::contains`] but provided for some
+    /// compatibility with other Map apis.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert!(m.contains_key(h));
+    /// m.remove(h);
+    /// assert!(!m.contains_key(h));
+    /// ```
     #[inline]
     pub fn contains_key(&self, h: Handle) -> bool {
         self.get(h).is_some()
@@ -277,6 +416,15 @@ impl<T> HandleMap<T> {
     ///
     /// Note that this is a naive O(n) search, so if you want this often, you
     /// might want to store the handle as a field on the value.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.find_handle(&10), Some(h));
+    /// assert_eq!(m.find_handle(&11), None);
+    /// ```
     #[inline]
     pub fn find_handle(&self, item: &T) -> Option<Handle>
     where
@@ -291,6 +439,16 @@ impl<T> HandleMap<T> {
     }
 
     /// Reserve space for `sz` additional items.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// assert_eq!(m.capacity(), 0);
+    /// m.reserve(10);
+    /// assert!(m.capacity() >= 10);
+    /// ```
     pub fn reserve(&mut self, sz: usize) {
         self.grow(self.len() + sz);
     }
@@ -299,6 +457,15 @@ impl<T> HandleMap<T> {
     ///
     /// See also `iter_with_handles` if you want the handles during
     /// iteration.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// m.insert(10u32);
+    /// assert_eq!(*m.iter().next().unwrap(), 10);
+    /// ```
     #[inline]
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a T> + 'a {
         self.entries.iter().filter_map(|e| e.payload.as_ref())
@@ -308,6 +475,18 @@ impl<T> HandleMap<T> {
     ///
     /// See also `iter_mut_with_handles` if you want the handles during
     /// iteration.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// for v in m.iter_mut() {
+    ///     *v += 1;
+    /// }
+    /// assert_eq!(m[h], 11);
+    /// ```
     #[inline]
     pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T> + 'a {
         self.entries.iter_mut().filter_map(|e| e.payload.as_mut())
@@ -315,6 +494,15 @@ impl<T> HandleMap<T> {
 
     /// Get an iterator over every occupied slot of this map, as well as a
     /// handle which can be used to fetch them later.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// # let m: HandleMap<u32> = HandleMap::new();
+    /// for (h, v) in m.iter_with_handles() {
+    ///     println!("{:?} => {}", h, v);
+    /// }
+    /// ```
     #[inline]
     pub fn iter_with_handles<'a>(&'a self) -> impl Iterator<Item = (Handle, &'a T)> + 'a {
         self.entries.iter().enumerate().filter_map(move |(i, e)| {
@@ -326,6 +514,16 @@ impl<T> HandleMap<T> {
 
     /// Get a mut iterator over every occupied slot of this map, as well as a
     /// handle which can be used to fetch them later.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// # let mut m = HandleMap::<u32>::new();
+    /// for (h, v) in m.iter_mut_with_handles() {
+    ///     *v += 1;
+    ///     println!("{:?}", h);
+    /// }
+    /// ```
     #[inline]
     pub fn iter_mut_with_handles<'a>(
         &'a mut self,
@@ -343,7 +541,16 @@ impl<T> HandleMap<T> {
     }
 
     /// If `index` refers to an occupied entry, return a `Handle` to it.
-    /// Otherwise, return None.
+    /// Otherwise, return None. This is a low level API that shouldn't be needed
+    /// for typical use.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.handle_for_index(h.index()), Some(h));
+    /// ```
     #[inline]
     pub fn handle_for_index(&self, index: usize) -> Option<Handle> {
         let e = self.entries.get(index)?;
@@ -559,6 +766,14 @@ impl<T> HandleMap<T> {
     /// Advanced usage note: Even generations always indicate an occupied index,
     /// except for 0, which is never a valid generation.
     ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// let mut m = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.raw_generation_for_index(h.index()), Some(h.generation()));
+    /// ```
+    ///
     /// # Caveat
     /// This is a low level feature intended for advanced usage, typically you
     /// do not need to call this function, however doing so is harmless.
@@ -705,6 +920,16 @@ impl Handle {
         (self.0 >> 48) as u16
     }
 
+    /// Returns the metadata field of this handle. This is an alias for
+    /// `map_id`, as in the common case, this is what the metadata field is used
+    /// for.
+    ///
+    /// See [`Handle::meta`] for more info.
+    #[inline]
+    pub const fn map_id(self) -> u16 {
+        (self.0 >> 32) as u16
+    }
+
     /// Returns the metadata field of this handle.
     ///
     /// If used with a [`HandleMap`] (instead of directly coming from a
@@ -840,11 +1065,13 @@ mod tests {
         assert_eq!(h.index(), 0);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.meta(), h.map_id());
 
         let h = Handle::from_raw_parts(!0, 0, 0);
         assert_eq!(h.index(), (!0u32) as usize);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.meta(), h.map_id());
         assert_eq!(h.decompose(), (h.index() as u32, h.generation(), h.meta()));
 
         assert_eq!(Handle::from_raw(h.into_raw()), h);
@@ -853,16 +1080,19 @@ mod tests {
         assert_eq!(h.index(), 0);
         assert_eq!(h.generation(), !0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.meta(), h.map_id());
 
         let h = Handle::from_raw_parts(0, 0, !0);
         assert_eq!(h.index(), 0);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), !0);
+        assert_eq!(h.meta(), h.map_id());
 
         let h = Handle::from_raw_parts(!0, !0, !0);
         assert_eq!(h.index(), (!0u32) as usize);
         assert_eq!(h.generation(), !0);
         assert_eq!(h.meta(), !0);
+        assert_eq!(h.meta(), h.map_id());
     }
 
     #[derive(PartialEq, Debug, Clone, Copy)]

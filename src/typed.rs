@@ -1,6 +1,7 @@
-//! This module provides [`TypedHandle`] and [`Handle`]. These are wrappers
-//! around of [`HandleMap`] and [`Handle`] which statically prevent trying to
-//! use a `Handle` returned from a `HandleMap<T>` to get a value out of a
+//! This module provides [`TypedHandleMap`][typed::TypedHandleMap] and
+//! [`TypedHandle`][typed::TypedHandle]. These are wrappers around of
+//! [`HandleMap`] and [`Handle`] which statically prevent trying to use a
+//! `Handle` returned from a `HandleMap<T>` to get a value out of a
 //! `HandleMap<U>`, instead of allowing it to fail at runtime, as it will with
 //! `HandleMap`.
 //!
@@ -37,36 +38,110 @@ pub struct TypedHandleMap<T>(HandleMap<T>);
 
 impl<T> TypedHandleMap<T> {
     /// Create a new typed handle map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// // No allocation is performed by default.
+    /// assert_eq!(m.capacity(), 0);
+    /// ```
     #[inline]
     pub fn new() -> Self {
         Self(HandleMap::new())
     }
 
     /// Create a typed handle map from one which accepts untyped handles.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// # use handy::typed::{TypedHandleMap, TypedHandle};
+    /// let mut m: HandleMap<u32> = HandleMap::new();
+    /// let h = m.insert(10u32);
+    /// let tm = TypedHandleMap::from_untyped(m);
+    /// assert_eq!(tm[TypedHandle::from_handle(h)], 10u32);
+    /// ```
     #[inline]
     pub fn from_untyped(h: HandleMap<T>) -> Self {
         Self(h)
     }
 
+    /// Convert this map into it's wrapped [`HandleMap`]. See also
+    /// [`TypedHandleMap::as_untyped_map`] and [`TypedHandleMap::as_mut_untyped_map`].
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut tm: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let th = tm.insert(10u32);
+    /// let m = tm.into_untyped();
+    /// assert_eq!(m[th.handle()], 10);
+    /// ```
+    #[inline]
+    pub fn into_untyped(self) -> HandleMap<T> {
+        self.0
+    }
+
     /// Create a new typed handle map with the specified capacity.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let m: TypedHandleMap<u32> = TypedHandleMap::with_capacity(10);
+    /// // Note that we don't guarantee the capacity will be exact.
+    /// // (though in practice it will so long as the requested
+    /// // capacity is >= 8)
+    /// assert!(m.capacity() >= 10);
+    /// ```
     #[inline]
     pub fn with_capacity(c: usize) -> Self {
         Self::from_untyped(HandleMap::with_capacity(c))
     }
 
     /// Get the number of entries we can hold before reallocation.
+    ///
+    /// This just calls [`HandleMap::capacity`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// m.insert(10);
+    /// assert!(m.capacity() >= 1);
+    /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
         self.0.capacity()
     }
 
     /// Get the number of occupied entries.
+    ///
+    /// This just calls [`HandleMap::len`] on our wrapped map.
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// assert_eq!(m.len(), 0);
+    /// m.insert(10u32);
+    /// assert_eq!(m.len(), 1);
+    /// ```
     #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns true if our length is zero.
+    ///
+    /// This just calls [`HandleMap::is_empty`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// assert!(m.is_empty());
+    /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -76,6 +151,15 @@ impl<T> TypedHandleMap<T> {
     ///
     /// This shouldn't be necessary except in advanced use, but may allow access
     /// to APIs that aren't mirrored, like most of the `raw` APIs.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::HandleMap;
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut tm: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let th = tm.insert(10u32);
+    /// assert_eq!(tm.as_untyped_map()[th.handle()], 10);
+    /// ```
     #[inline]
     pub fn as_untyped_map(&self) -> &HandleMap<T> {
         &self.0
@@ -85,6 +169,15 @@ impl<T> TypedHandleMap<T> {
     ///
     /// This shouldn't be necessary except in advanced use, but may allow access
     /// to APIs that aren't mirrored, like most of the `raw` APIs.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut tm = TypedHandleMap::new();
+    /// let th = tm.insert(10u32);
+    /// tm.as_mut_untyped_map()[th.handle()] = 5;
+    /// assert_eq!(tm[th], 5);
+    /// ```
     #[inline]
     pub fn as_mut_untyped_map(&mut self) -> &mut HandleMap<T> {
         &mut self.0
@@ -93,6 +186,15 @@ impl<T> TypedHandleMap<T> {
     /// Add a new item, returning a handle to it.
     ///
     /// This just calls [`HandleMap::insert`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m = TypedHandleMap::new();
+    /// assert_eq!(m.len(), 0);
+    /// m.insert(10u32);
+    /// assert_eq!(m.len(), 1);
+    /// ```
     #[inline]
     pub fn insert(&mut self, value: T) -> TypedHandle<T> {
         TypedHandle::from_handle(self.0.insert(value))
@@ -108,6 +210,17 @@ impl<T> TypedHandleMap<T> {
     /// - It appears corrupt in some other way.
     ///
     /// This just calls [`HandleMap::remove`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// // Present:
+    /// assert_eq!(m.remove(h), Some(10));
+    /// // Not present:
+    /// assert_eq!(m.remove(h), None);
+    /// ```
     #[inline]
     pub fn remove(&mut self, handle: TypedHandle<T>) -> Option<T> {
         self.0.remove(handle.h)
@@ -116,6 +229,16 @@ impl<T> TypedHandleMap<T> {
     /// Remove all entries in this handle map.
     ///
     /// This just calls [`HandleMap::clear`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// m.clear();
+    /// assert_eq!(m.len(), 0);
+    /// assert_eq!(m.get(h), None);
+    /// ```
     #[inline]
     pub fn clear(&mut self) {
         self.0.clear();
@@ -131,6 +254,16 @@ impl<T> TypedHandleMap<T> {
     /// - It appears corrupt in some other way.
     ///
     /// This just calls [`HandleMap::get`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.get(h), Some(&10));
+    /// m.remove(h);
+    /// assert_eq!(m.get(h), None);
+    /// ```
     #[inline]
     pub fn get(&self, handle: TypedHandle<T>) -> Option<&T> {
         self.0.get(handle.h)
@@ -146,6 +279,18 @@ impl<T> TypedHandleMap<T> {
     /// - It appears corrupt in some other way.
     ///
     /// This just calls [`HandleMap::get_mut`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// *m.get_mut(h).unwrap() += 1;
+    /// assert_eq!(m[h], 11);
+    /// // Note: The following is equivalent if you're going to `unwrap` the result of get_mut:
+    /// m[h] += 1;
+    /// assert_eq!(m[h], 12);
+    /// ```
     #[inline]
     pub fn get_mut(&mut self, handle: TypedHandle<T>) -> Option<&mut T> {
         self.0.get_mut(handle.h)
@@ -153,7 +298,35 @@ impl<T> TypedHandleMap<T> {
 
     /// Returns true if the handle refers to an item present in this map.
     ///
+    /// This just calls [`HandleMap::contains`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert!(m.contains(h));
+    /// m.remove(h);
+    /// assert!(!m.contains(h));
+    /// ```
+    #[inline]
+    pub fn contains(&self, h: TypedHandle<T>) -> bool {
+        self.0.contains_key(h.h)
+    }
+
+    /// Returns true if the handle refers to an item present in this map.
+    ///
     /// This just calls [`HandleMap::contains_key`] on our wrapped map.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert!(m.contains_key(h));
+    /// m.remove(h);
+    /// assert!(!m.contains_key(h));
+    /// ```
     #[inline]
     pub fn contains_key(&self, h: TypedHandle<T>) -> bool {
         self.0.contains_key(h.h)
@@ -169,6 +342,15 @@ impl<T> TypedHandleMap<T> {
     ///
     /// This just calls [`HandleMap::find_handle`] on our wrapped map and wraps
     /// the resulting handle.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.find_handle(&10), Some(h));
+    /// assert_eq!(m.find_handle(&11), None);
+    /// ```
     #[inline]
     pub fn find_handle(&self, item: &T) -> Option<TypedHandle<T>>
     where
@@ -180,6 +362,16 @@ impl<T> TypedHandleMap<T> {
     /// Reserve space for `sz` additional items.
     ///
     /// This just calls [`HandleMap::reserve`] on our wrapped map.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// assert_eq!(m.capacity(), 0);
+    /// m.reserve(10);
+    /// assert!(m.capacity() >= 10);
+    /// ```
     pub fn reserve(&mut self, sz: usize) {
         self.0.reserve(sz)
     }
@@ -190,6 +382,15 @@ impl<T> TypedHandleMap<T> {
     /// iteration.
     ///
     /// This just calls [`HandleMap::iter`] on our wrapped map.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// m.insert(10u32);
+    /// assert_eq!(*m.iter().next().unwrap(), 10);
+    /// ```
     #[inline]
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a T> + 'a {
         self.0.iter()
@@ -201,6 +402,18 @@ impl<T> TypedHandleMap<T> {
     /// iteration.
     ///
     /// This just calls [`HandleMap::iter_mut`] on our wrapped map.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// for v in m.iter_mut() {
+    ///     *v += 1;
+    /// }
+    /// assert_eq!(m[h], 11);
+    /// ```
     #[inline]
     pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T> + 'a {
         self.0.iter_mut()
@@ -211,6 +424,15 @@ impl<T> TypedHandleMap<T> {
     ///
     /// This just calls [`HandleMap::iter_with_handles`] on our wrapped map and
     /// wraps the resulting handles.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// # let m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// for (h, v) in m.iter_with_handles() {
+    ///     println!("{:?} => {}", h, v);
+    /// }
+    /// ```
     #[inline]
     pub fn iter_with_handles<'a>(&'a self) -> impl Iterator<Item = (TypedHandle<T>, &'a T)> + 'a {
         self.0
@@ -223,6 +445,16 @@ impl<T> TypedHandleMap<T> {
     ///
     /// This just calls [`HandleMap::iter_mut_with_handles`] on our wrapped map and
     /// wraps the resulting handles
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// # let mut m = TypedHandleMap::<u32>::new();
+    /// for (h, v) in m.iter_mut_with_handles() {
+    ///     *v += 1;
+    ///     println!("{:?}", h);
+    /// }
+    /// ```
     #[inline]
     pub fn iter_mut_with_handles<'a>(
         &'a mut self,
@@ -237,6 +469,14 @@ impl<T> TypedHandleMap<T> {
     ///
     /// This just calls [`HandleMap::handle_for_index`] on our wrapped map and wraps
     /// the resulting handle.
+    ///
+    /// ## Example
+    /// ```
+    /// # use handy::typed::TypedHandleMap;
+    /// let mut m: TypedHandleMap<u32> = TypedHandleMap::new();
+    /// let h = m.insert(10u32);
+    /// assert_eq!(m.handle_for_index(h.index()), Some(h));
+    /// ```
     #[inline]
     pub fn handle_for_index(&self, index: usize) -> Option<TypedHandle<T>> {
         self.0.handle_for_index(index).map(TypedHandle::from_handle)
@@ -356,6 +596,16 @@ impl<T> TypedHandle<T> {
     pub const fn meta(self) -> u16 {
         self.h.meta()
     }
+
+    /// Returns the metadata field of this handle. This is an alias for
+    /// `map_id`, as in the common case, this is what the metadata field is used
+    /// for.
+    ///
+    /// See [`Handle::meta`] for more info.
+    #[inline]
+    pub const fn map_id(self) -> u16 {
+        self.h.map_id()
+    }
 }
 
 impl<T> core::ops::Index<TypedHandle<T>> for TypedHandleMap<T> {
@@ -468,11 +718,13 @@ mod tests {
         assert_eq!(h.index(), 0);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.meta(), h.map_id());
 
         let h = TypedHandle::<()>::from_raw_parts(!0, 0, 0);
         assert_eq!(h.index(), (!0u32) as usize);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.meta(), h.map_id());
 
         assert_eq!(TypedHandle::<()>::from_raw(h.into_raw()), h);
 
@@ -480,16 +732,19 @@ mod tests {
         assert_eq!(h.index(), 0);
         assert_eq!(h.generation(), !0);
         assert_eq!(h.meta(), 0);
+        assert_eq!(h.meta(), h.map_id());
 
         let h = TypedHandle::<()>::from_raw_parts(0, 0, !0);
         assert_eq!(h.index(), 0);
         assert_eq!(h.generation(), 0);
         assert_eq!(h.meta(), !0);
+        assert_eq!(h.meta(), h.map_id());
 
         let h = TypedHandle::<()>::from_raw_parts(!0, !0, !0);
         assert_eq!(h.index(), (!0u32) as usize);
         assert_eq!(h.generation(), !0);
         assert_eq!(h.meta(), !0);
+        assert_eq!(h.meta(), h.map_id());
     }
 
     use crate::tests::Foobar;

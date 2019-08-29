@@ -241,7 +241,8 @@ impl<T> HandleMap<T> {
 
         debug_assert!(e.payload.is_none());
         e.payload = Some(value);
-        e.gen = e.gen.wrapping_add(1);
+        e.gen = e.gen.checked_add(1)
+            .expect("Generation overflowed");
 
         if e.gen == 0 {
             // Zero generation indicates an invalid handle.
@@ -299,9 +300,9 @@ impl<T> HandleMap<T> {
         }
         let update_gen = move |e: &mut Entry<T>| {
             if (e.gen & 1) == 0 {
-                e.gen = e.gen.wrapping_add(1);
+                e.gen = e.gen.checked_add(1).expect("Generation overflowed");
             } else {
-                e.gen = e.gen.wrapping_add(2);
+                e.gen = e.gen.checked_add(2).expect("Generation overflowed");
             }
             if e.gen == 0 {
                 e.gen = 1;
@@ -826,7 +827,7 @@ impl<T> HandleMap<T> {
 
     pub(crate) fn raw_remove(&mut self, index: usize) -> Option<T> {
         let mut e = &mut self.entries[index];
-        e.gen = e.gen.wrapping_add(1);
+        e.gen = e.gen.checked_add(1).expect("Generation overflowed");
         if e.gen == 0 {
             e.gen = 1;
         }

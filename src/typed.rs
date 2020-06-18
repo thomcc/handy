@@ -33,7 +33,7 @@ use core::marker::PhantomData;
 /// `T`, which is not true for a naïve implementation of this, so it's provided
 /// even though I don't think it's that helpful for most usage (handle maps
 /// already detect this at runtime).
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct TypedHandleMap<T>(HandleMap<T>);
 
 impl<T> TypedHandleMap<T> {
@@ -619,6 +619,11 @@ impl<T> core::ops::IndexMut<TypedHandle<T>> for TypedHandleMap<T> {
     fn index_mut(&mut self, h: TypedHandle<T>) -> &mut T {
         self.get_mut(h).expect("Invalid handle used in index_mut")
     }
+}
+
+impl<T> Default for TypedHandleMap<T> {
+    // #[derive()] only works if T is also Default, so open-code this
+    fn default() -> Self { Self::new() }
 }
 
 // The automatically derived trait implementations place a bound on T,

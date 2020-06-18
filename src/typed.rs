@@ -623,7 +623,9 @@ impl<T> core::ops::IndexMut<TypedHandle<T>> for TypedHandleMap<T> {
 
 impl<T> Default for TypedHandleMap<T> {
     // #[derive()] only works if T is also Default, so open-code this
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // The automatically derived trait implementations place a bound on T,
